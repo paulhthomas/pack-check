@@ -25,7 +25,6 @@ query ($q: String!) {
       shippingLine { title }
       shippingAddress { name address1 address2 city zip countryCodeV2 }
       billingAddress { name }
-      customer { displayName }
       lineItems(first: 50) {
         nodes {
           id name sku quantity unfulfilledQuantity requiresShipping variantTitle
