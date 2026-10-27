@@ -24,6 +24,8 @@ query ($q: String!) {
       id name createdAt sourceName tags
       shippingLine { title }
       shippingAddress { name address1 address2 city zip countryCodeV2 }
+      billingAddress { name }
+      customer { displayName }
       lineItems(first: 50) {
         nodes {
           id name sku quantity unfulfilledQuantity requiresShipping variantTitle
@@ -70,7 +72,7 @@ const POSTCODE = /^(GIR ?0AA|[A-Z]{1,2}\d[A-Z\d]? ?\d[A-Z]{2})$/;
 function addressIssues(o) {
   if (isCollection(o)) return [];
   const a = o.shippingAddress;
-  if (!a) return ['No delivery address'];
+  if (!a) return [];
   const a1 = (a.address1 || '').trim(), a2 = (a.address2 || '').trim();
   const issues = [];
   if (!a1 && !a2) issues.push('Address lines are blank');
@@ -81,7 +83,10 @@ function addressIssues(o) {
   if (/\d/.test(a.name || '')) issues.push('Number typed in the name field');
   return issues;
 }
-const isCollection = o => (o.shippingLine && o.shippingLine.title === COLLECTION_METHOD);
+// Pick-up orders: the in-store pick-up method, or an online order with nowhere to post it
+const isCollection = o => (o.shippingLine && o.shippingLine.title === COLLECTION_METHOD) || !o.shippingAddress;
+// Pick-up orders have no delivery address, so fall back to the billing name or the customer record
+const customerName = o => (o.shippingAddress && o.shippingAddress.name) || (o.billingAddress && o.billingAddress.name) || (o.customer && o.customer.displayName) || '';
 // Live check only: once the address is fixed, the alert goes, even if the order still carries an old address-flag tag
 const isFlagged = o => !o.tags.includes('address-ok') && addressIssues(o).length > 0;
 
@@ -92,7 +97,7 @@ function renderList() {
     const pills = (isFlagged(o) ? '<span class="pill warn">Check address</span>' : '') + (isCollection(o) ? '<span class="pill info">Collection</span>' : '');
     return `<button class="order" onclick="openOrder('${o.id}')">
       <b>${esc(o.name)}</b>${pills}<br>
-      <span class="meta">${esc(o.shippingAddress ? o.shippingAddress.name : '')} · ${items} item${items === 1 ? '' : 's'} · ${new Date(o.createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</span>
+      <span class="meta">${esc(customerName(o))} · ${items} item${items === 1 ? '' : 's'} · ${new Date(o.createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</span>
     </button>`;
   }).join('');
   app.innerHTML = `
@@ -146,7 +151,7 @@ function renderPack(feedback) {
     <div class="topbar"><button class="ghost" onclick="backToList()">‹ Orders</button><h1>${esc(order.name)}</h1></div>
     ${flagged ? `<div class="banner warn"><b>Check this address.</b> ${esc(issues.join('. '))}. Check the inbox in case the customer has replied; if not, pack and send as normal.
       <div class="actions"><button onclick="addressOk()">Named house – OK</button><button class="ghost" onclick="openInAdmin()">Edit address in Shopify</button></div></div>` : ''}
-    <div class="addr">${isCollection(order) ? '<b>Collection in store</b><br>' : ''}${esc(a.name || '')}<br>${esc([a.address1, a.address2, a.city, a.zip].filter(Boolean).join(', '))}</div>
+    <div class="addr">${isCollection(order) ? '<b>Collection in store</b><br>' : ''}${esc(customerName(order))}${isCollection(order) && !order.shippingAddress ? '' : '<br>' + esc([a.address1, a.address2, a.city, a.zip].filter(Boolean).join(', '))}</div>
     <div class="scanbar">
       <button class="scanbtn" onclick="scan()">Scan item</button>
       <div class="row2"><input id="typed" inputmode="numeric" autocomplete="off" placeholder="Or type a barcode"><button class="ghost" onclick="checkTyped()">Check</button></div>
