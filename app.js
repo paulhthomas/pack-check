@@ -104,8 +104,12 @@ function renderList() {
     ${staffName ? `<p class="sub">Packing as ${esc(staffName)}</p>`
       : `<div class="sub" style="display:grid;grid-template-columns:auto 1fr auto;gap:6px;align-items:center">
            <span>Your initials:</span>
-           <input id="initials" autocomplete="off" maxlength="5" value="${esc(localStorage.getItem('packer') || '')}" placeholder="e.g. AB" style="padding:8px">
+           <input id="initials" autocomplete="off" maxlength="5" value="${esc(staffName ? '' : (packer() || ''))}" placeholder="e.g. AB" style="padding:8px">
            <button class="ghost" style="padding:8px 12px" onclick="setPacker()">Save</button>
+           <label style="grid-column:1/-1;font-size:13px;display:flex;gap:6px;align-items:center">
+             <input type="checkbox" style="width:auto" ${isShared() ? 'checked' : ''} onchange="setShared(this.checked)">
+             Shared device (initials clear after 30 minutes without use)
+           </label>
          </div>`}
     ${rows || '<p class="empty">Nothing waiting to pack.</p>'}`;
 }
@@ -117,11 +121,13 @@ function openOrder(id) {
     alertList('Enter your initials at the top first, so the order records who packed it.');
     return;
   }
+  touch();
   const order = orders.find(o => o.id === id);
   clearStaleFlag(order);
   const saved = JSON.parse(localStorage.getItem('pack:' + id) || '{}');
   current = {
     order,
+    packer: packer(),
     overrides: saved.overrides || [],
     lines: order.packLines.map(l => ({
       ...l,
@@ -195,6 +201,7 @@ function checkTyped() {
 async function handleCode(raw) {
   const code = norm(raw);
   if (!code) return;
+  touch();
   const line = current.lines.find(l => l.codes.includes(code));
   if (line && line.got < line.need) {
     line.got += 1; save(); buzz(true);
@@ -237,7 +244,8 @@ function saveEye(i) {
     return;
   }
   line.got = line.need;
-  current.overrides.push(`${line.name}: ${reason} (${packer()})`);
+  touch();
+  current.overrides.push(`${line.name}: ${reason} (${current.packer})`);
   current.confirming = null;
   save();
   renderPack({ kind: 'warn', text: `Confirmed by eye: ${line.name}` });
@@ -253,7 +261,7 @@ async function complete() {
     }`, {
       id: order.id, tags,
       mf: [
-        { ownerId: order.id, namespace: 'pack_check', key: 'packed_by', type: 'single_line_text_field', value: packer() || 'unknown' },
+        { ownerId: order.id, namespace: 'pack_check', key: 'packed_by', type: 'single_line_text_field', value: current.packer || packer() || 'unknown' },
         { ownerId: order.id, namespace: 'pack_check', key: 'packed_at', type: 'date_time', value: new Date().toISOString() },
       ].concat(overrides.length ? [{ ownerId: order.id, namespace: 'pack_check', key: 'overrides', type: 'multi_line_text_field', value: overrides.join('\n') }] : []),
     });
@@ -305,11 +313,30 @@ function save() {
 }
 // Compare barcodes ignoring spaces and leading zeros (scanners sometimes add a 0 to 12-digit codes)
 function norm(v) { return String(v || '').replace(/\s/g, '').replace(/^0+/, ''); }
-function packer() { return staffName || localStorage.getItem('packer'); }
+// Who is packing: Shopify's name if available, otherwise the initials typed on this device.
+// On a shared device the initials clear after 30 minutes without use, so the next person enters theirs.
+const SHARED_TIMEOUT = 30 * 60 * 1000;
+function isShared() { return localStorage.getItem('sharedDevice') === '1'; }
+function packer() {
+  if (staffName) return staffName;
+  const p = localStorage.getItem('packer');
+  if (!p) return null;
+  if (isShared() && Date.now() - (+localStorage.getItem('packerActive') || 0) > SHARED_TIMEOUT) {
+    localStorage.removeItem('packer');
+    return null;
+  }
+  return p;
+}
+function touch() { localStorage.setItem('packerActive', String(Date.now())); }
+function setShared(on) {
+  if (on) localStorage.setItem('sharedDevice', '1'); else localStorage.removeItem('sharedDevice');
+  touch();
+  alertList(on ? 'Shared device: initials will clear after 30 minutes without use.' : 'Initials will be remembered on this device.', true);
+}
 function setPacker() {
   const box = document.getElementById('initials');
   const v = box ? box.value.trim().toUpperCase() : '';
-  if (v) localStorage.setItem('packer', v); else localStorage.removeItem('packer');
+  if (v) { localStorage.setItem('packer', v); touch(); } else localStorage.removeItem('packer');
   if (!current) { renderList(); if (v) alertList(`Packing as ${v}`, true); }
 }
 function alertList(text, ok) {
