@@ -142,7 +142,13 @@ function renderPack(feedback) {
         <div class="small">${l.sku ? 'SKU ' + esc(l.sku) + ' · ' : ''}${noCode ? 'No barcode in Shopify' : esc(l.codes.join(', '))}</div>
       </div>
       <div class="count">${l.got}/${l.need}</div>
-      ${noCode && !done ? `<button class="ghost confirm" onclick="confirmByEye(${i})">No barcode: confirm by eye</button>` : ''}
+      ${noCode && !done ? (current.confirming === i
+        ? `<div style="grid-column:1/-1;display:grid;grid-template-columns:1fr auto auto;gap:6px">
+             <input id="eye-${i}" autocomplete="off" placeholder="What did you check? e.g. size 9 label">
+             <button onclick="saveEye(${i})">Confirm</button>
+             <button class="ghost" onclick="cancelEye()">Cancel</button>
+           </div>`
+        : `<button class="ghost confirm" onclick="startEye(${i})">No barcode: confirm by eye</button>`) : ''}
     </div>`;
   }).join('');
 
@@ -200,12 +206,30 @@ async function handleCode(raw) {
   }
 }
 
-function confirmByEye(i) {
+// Confirm by eye uses an on-screen box rather than a pop-up: pop-ups (prompt) are blocked
+// inside the Shopify app on iPad, which made the button appear to do nothing.
+function startEye(i) {
+  current.confirming = i;
+  renderPack();
+  const box = document.getElementById('eye-' + i);
+  if (box) { box.focus(); box.addEventListener('keydown', e => { if (e.key === 'Enter') saveEye(i); }); }
+}
+
+function cancelEye() { current.confirming = null; renderPack(); }
+
+function saveEye(i) {
   const line = current.lines[i];
-  const reason = prompt(`No barcode is saved for ${line.name}. Check it by eye, then say what you checked (e.g. "size 9 label checked"):`);
-  if (!reason) return;
+  const box = document.getElementById('eye-' + i);
+  const reason = box ? box.value.trim() : '';
+  if (!reason) {
+    renderPack({ kind: 'warn', text: 'Type what you checked (e.g. "size 9 label checked"), then press Confirm.' });
+    const again = document.getElementById('eye-' + i);
+    if (again) { again.focus(); again.addEventListener('keydown', e => { if (e.key === 'Enter') saveEye(i); }); }
+    return;
+  }
   line.got = line.need;
   current.overrides.push(`${line.name}: ${reason} (${packer()})`);
+  current.confirming = null;
   save();
   renderPack({ kind: 'warn', text: `Confirmed by eye: ${line.name}` });
 }
