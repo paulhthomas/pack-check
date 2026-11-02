@@ -101,13 +101,22 @@ function renderList() {
   }).join('');
   app.innerHTML = `
     <div class="topbar"><h1>Orders to pack</h1><button class="ghost" onclick="loadOrders()">Refresh</button></div>
-    <p class="sub">Packing as ${esc(packer() || 'not set')}${staffName ? '' : ' · <a href="#" onclick="setPacker();return false;">change</a>'}</p>
+    ${staffName ? `<p class="sub">Packing as ${esc(staffName)}</p>`
+      : `<div class="sub" style="display:grid;grid-template-columns:auto 1fr auto;gap:6px;align-items:center">
+           <span>Your initials:</span>
+           <input id="initials" autocomplete="off" maxlength="5" value="${esc(localStorage.getItem('packer') || '')}" placeholder="e.g. AB" style="padding:8px">
+           <button class="ghost" style="padding:8px 12px" onclick="setPacker()">Save</button>
+         </div>`}
     ${rows || '<p class="empty">Nothing waiting to pack.</p>'}`;
 }
 
 // ---------- Pack screen ----------
 function openOrder(id) {
-  if (!packer()) setPacker();
+  if (!packer()) {
+    // No name from Shopify and no initials yet: ask on screen rather than with a pop-up (pop-ups are blocked on iPad)
+    alertList('Enter your initials at the top first, so the order records who packed it.');
+    return;
+  }
   const order = orders.find(o => o.id === id);
   clearStaleFlag(order);
   const saved = JSON.parse(localStorage.getItem('pack:' + id) || '{}');
@@ -298,9 +307,19 @@ function save() {
 function norm(v) { return String(v || '').replace(/\s/g, '').replace(/^0+/, ''); }
 function packer() { return staffName || localStorage.getItem('packer'); }
 function setPacker() {
-  const v = prompt('Your initials, so packed orders show who checked them:', packer() || '');
-  if (v) localStorage.setItem('packer', v.trim().toUpperCase());
-  if (!current) renderList();
+  const box = document.getElementById('initials');
+  const v = box ? box.value.trim().toUpperCase() : '';
+  if (v) localStorage.setItem('packer', v); else localStorage.removeItem('packer');
+  if (!current) { renderList(); if (v) alertList(`Packing as ${v}`, true); }
+}
+function alertList(text, ok) {
+  renderList();
+  const note = document.createElement('div');
+  note.className = 'banner ' + (ok ? '' : 'warn');
+  note.style.cssText = ok ? 'background:var(--go-bg);color:var(--go)' : '';
+  note.textContent = text;
+  const sub = app.querySelector('.sub');
+  if (sub) sub.after(note);
 }
 function buzz(ok) { if (navigator.vibrate) navigator.vibrate(ok ? 60 : [120, 80, 120]); }
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
