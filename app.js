@@ -129,6 +129,7 @@ function openOrder(id) {
     order,
     packer: packer(),
     overrides: saved.overrides || [],
+    addrAck: saved.addrAck || null,
     lines: order.packLines.map(l => ({
       ...l,
       need: l.unfulfilledQuantity,
@@ -145,6 +146,9 @@ function renderPack(feedback) {
   const issues = order.tags.includes('address-ok') ? [] : addressIssues(order);
   const flagged = isFlagged(order);
   const allDone = lines.every(l => l.got >= l.need);
+  // A flagged address must be acknowledged before Complete unlocks (the order is never held)
+  const needsAck = flagged && !current.addrAck;
+  const canComplete = allDone && !needsAck;
 
   const lineHtml = lines.map((l, i) => {
     const done = l.got >= l.need;
@@ -170,7 +174,9 @@ function renderPack(feedback) {
   app.innerHTML = `
     <div class="topbar"><button class="ghost" onclick="backToList()">‹ Orders</button><h1>${esc(order.name)}</h1></div>
     ${flagged ? `<div class="banner warn"><b>Check this address.</b> ${esc(issues.join('. '))}. Check the inbox in case the customer has replied; if not, pack and send as normal.
-      <div class="actions"><button onclick="addressOk()">Named house – OK</button><button class="ghost" onclick="openInAdmin()">Edit address in Shopify</button></div></div>` : ''}
+      <div class="actions">${current.addrAck
+        ? `<button disabled>✓ Inbox checked (${esc(current.addrAck.by)})</button>`
+        : `<button onclick="ackAddress()">I've checked the inbox for a reply</button>`}<button class="ghost" onclick="addressOk()">Named house – OK</button><button class="ghost" onclick="openInAdmin()">Edit address in Shopify</button></div></div>` : ''}
     <div class="addr">${isCollection(order) ? '<b>Collection in store</b><br>' : ''}${esc(customerName(order))}${isCollection(order) && !order.shippingAddress ? '' : '<br>' + esc([a.address1, a.address2, a.city, a.zip].filter(Boolean).join(', '))}</div>
     <div class="scanbar">
       <button class="scanbtn" onclick="scan()">Scan item</button>
@@ -178,7 +184,7 @@ function renderPack(feedback) {
       <div id="feedback" class="${feedback ? feedback.kind : ''}">${feedback ? esc(feedback.text) : ''}</div>
     </div>
     ${lineHtml}
-    <button style="width:100%;margin-top:8px" ${allDone ? '' : 'disabled'} onclick="complete()">${allDone ? 'Complete – all items checked' : 'Scan every item to complete'}</button>
+    <button style="width:100%;margin-top:8px" ${canComplete ? '' : 'disabled'} onclick="complete()">${canComplete ? 'Complete – all items checked' : (allDone ? 'Check the address warning at the top first' : 'Scan every item to complete')}</button>
 `;
   const input = document.getElementById('typed');
   input.addEventListener('keydown', e => { if (e.key === 'Enter') checkTyped(); });
@@ -251,6 +257,14 @@ function saveEye(i) {
   renderPack({ kind: 'warn', text: `Confirmed by eye: ${line.name}` });
 }
 
+// Packer confirms they've looked for the customer's reply about a flagged address; recorded on the order at Complete
+function ackAddress() {
+  touch();
+  current.addrAck = { by: current.packer || packer() || 'unknown', at: new Date().toISOString() };
+  save();
+  renderPack({ kind: 'go', text: 'Address warning acknowledged' });
+}
+
 async function complete() {
   const { order, overrides } = current;
   const tags = ['scan-verified'].concat(overrides.length ? ['scan-override'] : []);
@@ -263,7 +277,8 @@ async function complete() {
       mf: [
         { ownerId: order.id, namespace: 'pack_check', key: 'packed_by', type: 'single_line_text_field', value: current.packer || packer() || 'unknown' },
         { ownerId: order.id, namespace: 'pack_check', key: 'packed_at', type: 'date_time', value: new Date().toISOString() },
-      ].concat(overrides.length ? [{ ownerId: order.id, namespace: 'pack_check', key: 'overrides', type: 'multi_line_text_field', value: overrides.join('\n') }] : []),
+      ].concat(overrides.length ? [{ ownerId: order.id, namespace: 'pack_check', key: 'overrides', type: 'multi_line_text_field', value: overrides.join('\n') }] : [])
+       .concat(current.addrAck ? [{ ownerId: order.id, namespace: 'pack_check', key: 'address_ack', type: 'single_line_text_field', value: `Inbox checked by ${current.addrAck.by} at ${current.addrAck.at}` }] : []),
     });
     const errs = [...data.tagsAdd.userErrors, ...data.metafieldsSet.userErrors];
     if (errs.length) throw new Error(errs.map(e => e.message).join('; '));
@@ -309,7 +324,7 @@ function backToList() { current = null; renderList(); }
 // ---------- Helpers ----------
 function save() {
   const got = {}; current.lines.forEach(l => { got[l.id] = l.got; });
-  localStorage.setItem('pack:' + current.order.id, JSON.stringify({ got, overrides: current.overrides }));
+  localStorage.setItem('pack:' + current.order.id, JSON.stringify({ got, overrides: current.overrides, addrAck: current.addrAck }));
 }
 // Compare barcodes ignoring spaces and leading zeros (scanners sometimes add a 0 to 12-digit codes)
 function norm(v) { return String(v || '').replace(/\s/g, '').replace(/^0+/, ''); }
